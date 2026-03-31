@@ -9,6 +9,8 @@ from scipy.ndimage import gaussian_filter
 from utils import pad, unpad
 import math
 import cv2
+import numpy.typing as npt
+import itertools
 _COLOR_RED = (255, 0, 0)
 _COLOR_GREEN = (0, 255, 0)
 _COLOR_BLUE = (0, 0, 255)
@@ -41,15 +43,21 @@ def harris_corners(img, window_size=3, k=0.04):
 
     H, W= img.shape
     window = np.ones((window_size, window_size))
-    response = np.zeros((H, W))
 
     """ Your code starts here """
+    v = filters.sobel_v(img)
+    h = filters.sobel_h(img)
     
+    A = convolve(v * v, window, mode='constant')
+    B = convolve(v * h, window, mode='constant')
+    C = convolve(h * h, window, mode='constant')
+
+    R = (A * C - B * B) - k * (A + C)**2
     """ Your code ends here """ 
     
-    return response
+    return R
 
-def naive_descriptor(patch):
+def naive_descriptor(patch: npt.NDArray):
     '''
     Describe the patch by normalizing the image values into a standard 
     normal distribution (having mean of 0 and standard deviation of 1) 
@@ -64,10 +72,11 @@ def naive_descriptor(patch):
     Returns:
         feature: 1D array of shape (h * w)
     '''
-    feature = []
-    
+
     """ Your code starts here """
-    
+    mean = np.mean(patch)
+    std = np.std(patch)
+    feature = (patch.flatten() - mean) / (std + 0.0001)
     """ Your code ends here """
 
     return feature
@@ -139,15 +148,34 @@ def simple_sift(patch):
     # You can change the parameter sigma, which has been default to 3
     weights = np.flipud(np.fliplr(make_gaussian_kernel(patch.shape[0],3)))
     
-    histogram = np.zeros((4,4,8))
-    
     """ Your code starts here """
+    dy = filters.sobel_h(patch)
+    dx = filters.sobel_v(patch)
     
+    magnitudes = np.sqrt(dy**2 + dx**2)
+    ws = weights * magnitudes
+    
+    thetas = np.arctan2(dy, dx)
+    thetas[thetas < 0] += 2 * np.pi
+    angle_idxs = (np.floor(thetas / (np.pi / 4)) % 8).astype(np.int32)
+
+    store = np.zeros((128,)).astype(np.float32)
+    for i, j in itertools.product(range(4), range(4)):
+        sx, ex = i * 4, (i + 1) * 4
+        sy, ey = j * 4, (j + 1) * 4
+        to_add = (i * 4 + j) * 8
+
+        my_idxs = to_add + angle_idxs[sx:ex, sy:ey].flatten()
+        my_ws = ws[sx:ex, sy:ey].flatten()
+
+        np.add.at(store, my_idxs, my_ws)
+
+    feature = store / np.linalg.norm(store)
     """ Your code ends here """
 
     return feature
 
-def top_k_matches(desc1, desc2, k=2):
+def top_k_matches(desc1: npt.NDArray, desc2: npt.NDArray, k=2) -> list[tuple[int, list[tuple[int, float]]]]:
     '''
     Compute the Euclidean distance between each descriptor in desc1 versus all descriptors in desc2 (Hint: use cdist).
     For each descriptor Di in desc1, pick out k nearest descriptors from desc2, as well as the distances themselves.
@@ -159,8 +187,14 @@ def top_k_matches(desc1, desc2, k=2):
          ...<truncated>
     '''
     match_pairs = []
-    
+
     """ Your code starts here """
+    dist_mat = cdist(desc1, desc2, metric='euclidean')
+    for i in range(desc1.shape[0]):
+        dists = dist_mat[i]
+        sorted_dists = np.sort(dists)[:k]
+        sorted_idxs = np.argsort(dists)[:k]
+        match_pairs.append((i, list(zip(sorted_idxs, sorted_dists))))
     
     """ Your code ends here """
 
@@ -190,7 +224,11 @@ def ratio_test_match(desc1, desc2, match_threshold):
     top_2_matches = top_k_matches(desc1, desc2)
     
     """ Your code starts here """
-    
+    for i, dists in top_2_matches:
+        p1, p2, *_ = dists
+        if p1[1] / p2[1] < match_threshold:
+            match_pairs.append((i, p1[0]))
+
     """ Your code ends here """
 
     # Modify this line as you wish
