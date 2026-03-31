@@ -278,6 +278,26 @@ def transform_homography(src, h_matrix, getNormalized = True):
     
     return transformed
 
+def get_normalisation_matrix(points: npt.NDArray) -> npt.NDArray:
+    centroid = np.mean(points, axis=0)
+    avg_d = np.mean(np.linalg.norm(points - centroid, axis=1))
+    s = np.sqrt(2) / avg_d
+    
+    T = np.array([
+        [s, 0, -s * centroid[0]],
+        [0, s, -s * centroid[1]],
+        [0, 0, 1]
+    ])
+
+    return T
+
+def get_2_row(src_vec, dst_vec):
+    xs, ys = src_vec
+    xd, yd = dst_vec
+    return np.array([
+        [-xs, -ys, -1, 0, 0, 0, xs * xd, ys * xd, xd],
+        [0, 0, 0, -xs, -ys, -1, xs * yd, ys * yd, yd]
+    ])
 
 def compute_homography(src, dst):
     '''
@@ -297,10 +317,25 @@ def compute_homography(src, dst):
         cv2.findHomography(), cv2.getPerspectiveTransform(),
         np.linalg.solve(), np.linalg.lstsq()
     '''
-    h_matrix = np.eye(3, dtype=np.float64)
-  
+
     """ Your code starts here """
+    T_src = get_normalisation_matrix(src)
+    T_dst = get_normalisation_matrix(dst)
     
+    src_h = np.hstack((src, np.ones((src.shape[0], 1))))
+    dst_h = np.hstack((dst, np.ones((dst.shape[0], 1))))
+    
+    norm_src = np.transpose(T_src @ np.transpose(src_h))
+    norm_dst = np.transpose(T_dst @ np.transpose(dst_h))
+
+    rows = list(map(lambda tup: get_2_row(tup[0][:2], tup[1][:2]), zip(norm_src, norm_dst)))
+    A = np.concat(rows, axis=0)
+
+    _, _, Vh = np.linalg.svd(A)
+    h_vect = Vh[-1, :]
+    h_temp = h_vect.reshape((3, 3))
+
+    h_matrix = np.linalg.inv(T_dst) @ h_temp @ T_src
     """ Your code ends here """
 
     return h_matrix
