@@ -375,9 +375,28 @@ def ransac_homography(keypoints1, keypoints2, matches, sampling_ratio=0.5, n_ite
     # RANSAC iteration start
     
     """ Your code starts here """
-    
+    for _ in range(n_iters):
+        chosen_idxs = np.random.choice(N, n_samples)
+        src = matched1_unpad[chosen_idxs]
+        dst = matched2_unpad[chosen_idxs]
+        my_H = compute_homography(src, dst)
+
+        m1_changed = transform_homography(matched1_unpad, my_H)
+
+        diffs = matched2_unpad - m1_changed
+        dists = np.linalg.norm(diffs, axis=1)
+
+        current_inlier_mask = dists < delta
+        inliers_count = np.sum(current_inlier_mask)
+
+        #print(current_inlier_mask.shape)
+
+        if inliers_count > n_inliers:
+            n_inliers = inliers_count
+            max_inliers = current_inlier_mask
+
     """ Your code ends here """
-    
+    H = compute_homography(matched1_unpad[max_inliers], matched2_unpad[max_inliers])
     return H, matches[max_inliers]
 
 ##### Part 3: Mirror Symmetry Detection #####
@@ -437,7 +456,7 @@ def distance(pi, pj):
     y,x = pi[0]-pj[0], pi[1]-pj[1] 
     return np.sqrt(x**2+y**2)
 
-def shift_sift_descriptor(desc):
+def shift_sift_descriptor(desc: npt.NDArray):
     '''
        Generate a virtual mirror descriptor for a given descriptor.
        Note that you have to shift the bins within a mini histogram, and the mini histograms themselves.
@@ -487,7 +506,10 @@ def shift_sift_descriptor(desc):
     '''
     
     """ Your code starts here """
-    
+    grid = desc.copy().reshape(4, 4, 8)
+    grid = np.flipud(grid)
+    grid[:, :, 1:] = grid[:, :, 7:0:-1]
+    res = grid.flatten()
     """ Your code ends here """
     
     return res
@@ -499,13 +521,15 @@ def create_mirror_descriptors(img):
     Make sure the virtual descriptors correspond to the original set of descriptors.
     '''
     
-    """ Your code starts here """
+    """ Your code starts here """ 
+    kps, descs, sizes, angles = compute_cv2_descriptor(img)
+    mir_descs = np.array(list(map(shift_sift_descriptor, descs)))
     
     """ Your code ends here """
     
     return kps, descs, sizes, angles, mir_descs
 
-def match_mirror_descriptors(descs, mirror_descs, threshold = 0.7):
+def match_mirror_descriptors(descs: npt.NDArray, mirror_descs: npt.NDArray, threshold = 0.7):
     '''
     First use `top_k_matches` to find the nearest 3 matches for each keypoint. Then eliminate the mirror descriptor that comes 
     from the same keypoint. Perform ratio test on the two matches left. If no descriptor is eliminated, perform the ratio test 
@@ -515,9 +539,15 @@ def match_mirror_descriptors(descs, mirror_descs, threshold = 0.7):
 
     match_result = []
 
-    
     """ Your code starts here """
+    for i, k_nearest in three_matches:
+        valid = list(filter(lambda tup: tup[0] != i, k_nearest))
+
+        (i1, d1), (i2, d2), *_ = valid
+        if d1 / d2 <= threshold:
+            match_result.append((i, i1))
     
+    match_result = np.array(match_result)
     """ Your code ends here """
     
     return match_result
@@ -529,11 +559,18 @@ def find_symmetry_lines(matches, kps):
     Assume the points associated with the original descriptor set to be I's, and the points associated with the mirror descriptor set to be
     J's.
     '''
-    rhos = []
-    thetas = []
     
     """ Your code starts here """
-    
+    k1s = kps[matches[:, 0]]
+    k2s = kps[matches[:, 1]]
+
+    mids = (k1s + k2s) / 2
+    diff = k2s - k1s
+
+    thetas = np.arctan2(diff[:, 0], diff[:, 1])
+    thetas[thetas < 0] += 2 * np.pi
+    rhos = mids[:, 1] * np.cos(thetas) + mids[:, 0] * np.sin(thetas)
+
     """ Your code ends here """
     
     return rhos, thetas
@@ -546,15 +583,36 @@ def hough_vote_mirror(matches, kps, im_shape, window=1, threshold=0.5, num_lines
     Feel free to vary the interval size.
     '''
     rhos, thetas = find_symmetry_lines(matches, kps)
+    thetas %= 2 * np.pi
     
     """ Your code starts here """
+    h, w = im_shape
+    diag = math.ceil(math.sqrt(h**2 + w**2))
     
+    intv_rho = 1
+    intv_theta = np.pi / 180
+   
+    rho_bins = np.arange(-diag, diag + 1, intv_rho)
+    theta_bins = np.arange(0, 2 * np.pi, intv_theta)
+
+    A = np.zeros((rho_bins.shape[0], theta_bins.shape[0]), dtype=np.float32)
+
+    valid_idxs = (rhos <= diag) & (rhos >= -diag)
+    valid_rhos = rhos[valid_idxs]
+    valid_thetas = thetas[valid_idxs]
+
+    rho_idxs = np.floor((valid_rhos + diag) / intv_rho).astype(np.int32)
+    theta_idxs = np.floor((valid_thetas / intv_theta)).astype(np.int32)
+
+    np.add.at(A, [rho_idxs, theta_idxs], 1)
+
+    peaks = find_peak_params(A, [rho_bins, theta_bins], window, threshold)
+    rho_values = peaks[1][:num_lines]
+    theta_values = peaks[2][:num_lines]
+   
     """ Your code ends here """
     
     return rho_values, theta_values
-
-
-
 
 """Helper functions: You should not have to touch the following functions.
 """
