@@ -389,8 +389,6 @@ def ransac_homography(keypoints1, keypoints2, matches, sampling_ratio=0.5, n_ite
         current_inlier_mask = dists < delta
         inliers_count = np.sum(current_inlier_mask)
 
-        #print(current_inlier_mask.shape)
-
         if inliers_count > n_inliers:
             n_inliers = inliers_count
             max_inliers = current_inlier_mask
@@ -506,6 +504,7 @@ def shift_sift_descriptor(desc: npt.NDArray):
     '''
     
     """ Your code starts here """
+    # must copy else get wrong results
     grid = desc.copy().reshape(4, 4, 8)
     grid = np.flipud(grid)
     grid[:, :, 1:] = grid[:, :, 7:0:-1]
@@ -543,7 +542,7 @@ def match_mirror_descriptors(descs: npt.NDArray, mirror_descs: npt.NDArray, thre
     for i, k_nearest in three_matches:
         valid = list(filter(lambda tup: tup[0] != i, k_nearest))
 
-        (i1, d1), (i2, d2), *_ = valid
+        (i1, d1), (_, d2), *_ = valid
         if d1 / d2 <= threshold:
             match_result.append((i, i1))
     
@@ -554,65 +553,51 @@ def match_mirror_descriptors(descs: npt.NDArray, mirror_descs: npt.NDArray, thre
 
 
 def find_symmetry_lines(matches, kps):
-    '''
-    For each pair of matched keypoints, use the keypoint coordinates to compute a candidate symmetry line.
-    Assume the points associated with the original descriptor set to be I's, and the points associated with the mirror descriptor set to be
-    J's.
-    '''
-    
-    """ Your code starts here """
-    k1s = kps[matches[:, 0]]
-    k2s = kps[matches[:, 1]]
+    p1 = kps[matches[:, 0]]
+    p2 = kps[matches[:, 1]]
 
-    mids = (k1s + k2s) / 2
-    diff = k2s - k1s
+    mids = (p1 + p2) / 2.0
 
+    diff = p2 - p1
     thetas = np.arctan2(diff[:, 0], diff[:, 1])
-    thetas[thetas < 0] += 2 * np.pi
-    rhos = mids[:, 1] * np.cos(thetas) + mids[:, 0] * np.sin(thetas)
 
-    """ Your code ends here """
+    # range of values is -pi <= x <= pi
+    # for theta < 0 add 2 * np.pi to make range 0 <= x <= 2 * np.pi
+    thetas[thetas < 0] += 2 * np.pi
+
+    rhos = mids[:, 1] * np.cos(thetas) + mids[:, 0] * np.sin(thetas)
     
     return rhos, thetas
 
 def hough_vote_mirror(matches, kps, im_shape, window=1, threshold=0.5, num_lines=1):
-    '''
-    Hough Voting:
-                 0<=thetas<= 2pi      , interval size = 1 degree
-        -diagonal <= rhos <= diagonal , interval size = 1 pixel
-    Feel free to vary the interval size.
-    '''
     rhos, thetas = find_symmetry_lines(matches, kps)
-    thetas %= 2 * np.pi
     
-    """ Your code starts here """
-    h, w = im_shape
-    diag = math.ceil(math.sqrt(h**2 + w**2))
+    h, w = im_shape[:2]
+    diag = np.ceil(np.sqrt(h**2 + w**2)).astype(np.int32)
     
-    intv_rho = 1
-    intv_theta = np.pi / 180
-   
-    rho_bins = np.arange(-diag, diag + 1, intv_rho)
-    theta_bins = np.arange(0, 2 * np.pi, intv_theta)
+    d_rho = 1
+    d_theta = np.pi / 180
 
-    A = np.zeros((rho_bins.shape[0], theta_bins.shape[0]), dtype=np.float32)
+    rho_bins = np.arange(-diag, diag + 1, d_rho)
+    theta_bins = np.arange(0, 2 * np.pi, d_theta)
 
-    valid_idxs = (rhos <= diag) & (rhos >= -diag)
-    valid_rhos = rhos[valid_idxs]
-    valid_thetas = thetas[valid_idxs]
+    A = np.zeros((rho_bins.shape[0], theta_bins.shape[0]))
 
-    rho_idxs = np.floor((valid_rhos + diag) / intv_rho).astype(np.int32)
-    theta_idxs = np.floor((valid_thetas / intv_theta)).astype(np.int32)
+    rho_idxs = np.round((rhos + diag) / d_rho).astype(np.int32)
+    theta_idxs = np.round(thetas / d_theta).astype(np.int32)
+    valid_idxs = (rho_idxs >= 0) & (rho_idxs < A.shape[0]) & (theta_idxs >= 0) & (theta_idxs < A.shape[1])
 
-    np.add.at(A, [rho_idxs, theta_idxs], 1)
+    # do not use [row_idxs, col_idxs]
+    # use (row_idxs, col_idxs)
+    # they give different results
+    np.add.at(A, (rho_idxs[valid_idxs], theta_idxs[valid_idxs]), 1)
 
-    peaks = find_peak_params(A, [rho_bins, theta_bins], window, threshold)
-    rho_values = peaks[1][:num_lines]
-    theta_values = peaks[2][:num_lines]
-   
-    """ Your code ends here """
+    peaks = find_peak_params(A, (rho_bins, theta_bins), window, threshold)
     
-    return rho_values, theta_values
+    peak_rhos = peaks[1][:num_lines]
+    peak_thetas = peaks[2][:num_lines] # Fixed indexing here
+    
+    return peak_rhos, peak_thetas
 
 """Helper functions: You should not have to touch the following functions.
 """
