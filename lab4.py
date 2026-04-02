@@ -595,7 +595,7 @@ def hough_vote_mirror(matches, kps, im_shape, window=1, threshold=0.5, num_lines
     peaks = find_peak_params(A, (rho_bins, theta_bins), window, threshold)
     
     peak_rhos = peaks[1][:num_lines]
-    peak_thetas = peaks[2][:num_lines] # Fixed indexing here
+    peak_thetas = peaks[2][:num_lines]
     
     return peak_rhos, peak_thetas
 
